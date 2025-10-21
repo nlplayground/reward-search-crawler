@@ -1,0 +1,54 @@
+# --- Python build and cache ---
+__pycache__/
+*.py[cod]
+*$py.class
+
+# --- Virtual environments ---
+venv/
+.env/
+.venv/
+env/
+ENV/
+
+# --- Distribution / packaging ---
+build/
+dist/
+*.egg-info/
+.eggs/
+*.egg
+
+# --- Logs and databases ---
+*.log
+*.sqlite3
+*.db
+
+# --- Unit test / coverage reports ---
+.coverage
+*.cover
+htmlcov/
+.cache/
+.pytest_cache/
+.tox/
+.nox/
+
+# --- Jupyter Notebook checkpoints ---
+.ipynb_checkpoints/
+
+# --- IDE / editor settings ---
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# --- System files ---
+.DS_Store
+Thumbs.db
+
+# --- Custom project files ---
+wip.user.js
+
+# --- Temporary files ---
+*.tmp
+*.bak
+*.swp
+test*.py
