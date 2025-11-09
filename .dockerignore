@@ -1,0 +1,11 @@
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.log
+# .env
+.git/
+.gitignore
+tests/
+node_modules/
+helper.sh

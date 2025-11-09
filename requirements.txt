@@ -1,0 +1,11 @@
+httpx
+camoufox[geoip]
+rich
+aiolimiter
+httpx-curl-cffi
+sqlalchemy
+aiosqlite
+python-dotenv
+ruff
+curl-cffi
+google-cloud-storage

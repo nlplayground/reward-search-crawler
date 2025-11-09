@@ -1,3 +1,0 @@
-requests
-camoufox[geoip]
-rich

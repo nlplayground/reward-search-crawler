@@ -52,3 +52,7 @@ wip.user.js
 *.bak
 *.swp
 test*.py
+
+db/
+.env
+helper.sh

@@ -1,60 +1,108 @@
 from extractor import Extractor
-from utils.date_range import date_range
-from typing import Dict, Any, List
-import requests
+from typing import List
+from rich import print
+import httpx
+import asyncio
 
 
 class VirginExtractor(Extractor):
     def __init__(self, proxy: str = None):
         super().__init__(proxy)
+        self.program = "VA"
+        self.base_url = "https://book.virginaustralia.com"
+        self.graphql_url = f"{self.base_url}/api/graphql"
+        self.login_url = "https://book.virginaustralia.com/dx/VADX/1"
+        self.refresh_lock = asyncio.Lock()
+        self.refresh_condition = asyncio.Condition()
+        self.is_refreshing = False
     
-    def search_flights_for_date(
+    async def headers_from_browser(self, url, headless = "virtual") -> dict:
+        await super().headers_from_browser(url, headless)
+
+        self.session.headers.update({
+            "x-sabre-storefront": "VADX",
+            "Content-Type": "application/json",
+        })
+        return self.session.headers, self.session.cookies
+
+    async def preflight_check(self):
+        from datetime import date, timedelta
+        today = date.today()
+        dt =  (today + timedelta(days=2)).isoformat()
+        while True:
+            resp = await self._fetch_flights_once("MEL", "SYD", dt)
+            if not resp or resp.status_code >= 400:
+                print('invalid cookie, re login')
+                await self.headers_from_browser(self.login_url, "virtual")
+            else:
+                break
+
+    async def search_flights_for_date(
         self, origin: str, destination: str, date: str
     ) -> List[dict]:
-        payload = {
-            "operationName": "bookingAirSearch",
-            "variables": {
-                "airSearchInput": {
-                    "cabinClass": "Business",
-                    "awardBooking": True,
-                    "promoCodes": [],
-                    "searchType": "BRANDED",
-                    "itineraryParts": [
-                        {
-                            "from": {"useNearbyLocations": False, "code": origin},
-                            "to": {"useNearbyLocations": False, "code": destination},
-                            "when": {"date": date}
-                        }
-                    ],
-                    "passengers": {"ADT": 1}
-                }
-            },
-            "extensions": {},
-            "query": """query bookingAirSearch($airSearchInput: CustomAirSearchInput) {
-                bookingAirSearch(airSearchInput: $airSearchInput) {
-                    originalResponse
-                    __typename
-                }
-            }"""
-        }
+        async with self.limiter:
+            json_data = {
+                'operationName': 'bookingAirSearch',
+                'variables': {
+                    'airSearchInput': {
+                        'cabinClass': 'Business',
+                        'awardBooking': True,
+                        'promoCodes': [],
+                        'searchType': 'BRANDED',
+                        'itineraryParts': [
+                            {
+                                'from': {
+                                    'useNearbyLocations': False,
+                                    'code': origin,
+                                },
+                                'to': {
+                                    'useNearbyLocations': False,
+                                    'code': destination,
+                                },
+                                'when': {
+                                    'date': date,
+                                },
+                            },
+                        ],
+                        'passengers': {
+                            'ADT': 1,
+                        },
+                    },
+                },
+                'extensions': {},
+                'query': 'query bookingAirSearch($airSearchInput: CustomAirSearchInput) {\n                bookingAirSearch(airSearchInput: $airSearchInput) {\n                    originalResponse\n                    __typename\n                }\n            }',
+            }
 
+            try:
+                response = await self.session.post(
+                    self.graphql_url,
+                    json=json_data,
+                )
+                if response.status_code > 400:
+                    await self.headers_from_browser(self.login_url, "virtual")
+                    await self.preflight_check()
+                    response = await self.session.post(
+                        self.graphql_url,
+                        json=json_data,
+                        # timeout=10
+                    )
+                data = response.json()
+                origin_offers = data.get('data', {}).get('bookingAirSearch', {}).get('originalResponse', {}).get('unbundledOffers', [])
+                resolved = self.resolve_refs(origin_offers)
+                results = self.extract_offers(resolved, origin, destination, date)
 
-        try:
-            response = self.session.post(
-                self.graphql_url,
-                json=payload,
-                timeout=30
-            )
-            response.raise_for_status()
-            data = response.json()
-            origin_offers = data.get('data', {}).get('bookingAirSearch', {}).get('originalResponse', {}).get('unbundledOffers', [])
-            # Use resolve_refs and extract_offers as in your test.py
-            resolved = self.resolve_refs(origin_offers)
-            return self.extract_offers(resolved, origin, destination, date)
-
-        except requests.exceptions.RequestException as e:
-            print(f"Error fetching for {origin} → {destination} on {date}: {e}")
-            return []
+                return results
+            
+            except httpx.ReadTimeout as e:
+                print(f"Timeout VA fetching for {origin} → {destination} on {date}: {e}")
+                await self.headers_from_browser(self.login_url, "virtual")
+                await self.preflight_check()
+                return []
+            except Exception as e:
+                print(f"Error VA fetching for {origin} → {destination} on {date}:{type(e)}: {e}")
+                await self.headers_from_browser(self.login_url, "virtual")
+                await self.preflight_check()
+                return []
 
     def resolve_refs(self, obj):
         id_map = {}
@@ -90,11 +138,10 @@ class VirginExtractor(Extractor):
                 if not offer:
                     continue
 
-                # Only consider negotiated offers
                 if not offer.get("offerInformation", {}).get("negotiated", False):
                     continue
 
-                cabin = offer.get("cabinClass")
+                cabin = offer.get("cabinClass")[:3]
                 fare_alt = (
                     offer.get("fare", {})
                         .get("alternatives", [[[]]])[0][0]
@@ -117,7 +164,6 @@ class VirginExtractor(Extractor):
                     ]
                     if not segments:
                         continue
-
                     stops += len(segments) - 1
 
                     first_seg = segments[0]
@@ -125,21 +171,20 @@ class VirginExtractor(Extractor):
                     if first_seg["origin"] != origin or last_seg["destination"] != destination:
                         continue
 
-                    segs = [
-                        f"{seg['origin']} ({seg['flight']['airlineCode']}{seg['flight']['flightNumber']})"
-                        for seg in segments
-                    ]
-                    segs.append(f"{last_seg['destination']} ({last_seg['flight']['airlineCode']}{last_seg['flight']['flightNumber']})")
-                    segs_str = " -> ".join(segs)
+                    if len(segments) == 1:
+                        seg = segments[0]
+                        segs_str = f"{seg['flight']['airlineCode']}{seg['flight']['flightNumber']}"
+                    else:
+                        first_seg = segments[0]
+                        segs = [f"{first_seg['flight']['airlineCode']}{first_seg['flight']['flightNumber']}"]
+                        for seg in segments[1:]:
+                            segs.append(f"{seg['origin']}_{seg['flight']['airlineCode']}{seg['flight']['flightNumber']}")
+
+                        segs_str = "_".join(segs)
+
                     valid_route = True
 
                 if not valid_route:
-                    continue
-
-                # Filtering by stop conditions
-                if (origin == "SIN" and stops > 0) or (destination == "SIN" and stops > 0):
-                    continue
-                if stops > 1:
                     continue
 
                 if fare_alt:
@@ -148,19 +193,42 @@ class VirginExtractor(Extractor):
                         "destination": destination,
                         "date": (offer.get("departureDates") or [date])[0],
                         "cabin": cabin,
-                        "amount": fare_alt.get("amount"),
+                        "points": fare_alt.get("amount"),
                         "route": segs_str,
                         "stops": stops,
+                        "program": self.program 
                     })
 
         return results
 
-    def scrape(self, origins: List[str], destinations: List[str]):
-        all_results = []
-        for origin in origins:
-            for destination in destinations:
-                for d in date_range(days=360):
-                    offers = self.search_flights_for_date(origin, destination, d)
-                    all_results.extend(offers)
-                    print(offers)
-        return all_results
+    async def log_request(self, request):        
+        pass
+    async def log_response(self, response):
+        pass
+    async def _fetch_flights_once(self, origin: str, destination: str, date: str) -> httpx.Response:
+        """Make one raw GraphQL request — no retries, no recursion."""
+        try:
+            json_data = {
+                'operationName': 'bookingAirSearch',
+                'variables': {
+                    'airSearchInput': {
+                        'cabinClass': 'Business',
+                        'awardBooking': True,
+                        'promoCodes': [],
+                        'searchType': 'BRANDED',
+                        'itineraryParts': [{
+                            'from': {'useNearbyLocations': False, 'code': origin},
+                            'to': {'useNearbyLocations': False, 'code': destination},
+                            'when': {'date': date},
+                        }],
+                        'passengers': {'ADT': 1},
+                    },
+                },
+                'extensions': {},
+                'query': 'query bookingAirSearch($airSearchInput: CustomAirSearchInput) {\nbookingAirSearch(airSearchInput: $airSearchInput) {\noriginalResponse\n__typename\n}\n}',
+            }
+
+            return await self.session.post(self.graphql_url, json=json_data)
+        except Exception as e:
+            print(f"Error VA fetching for {origin} → {destination} on {date}:{type(e)}: {e}")
+            return None
