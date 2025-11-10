@@ -49,8 +49,7 @@ class CathayExtractor(Extractor):
             await page.click('button.masterSignIn__btn')
             await page.wait_for_load_state('networkidle')
             await page.goto(self.new_query_payload())
-            print(self.new_query_payload())
-            await page.wait_for_timeout(15000)
+            await page.wait_for_timeout(25000)
             requestParams = await page.evaluate("mw:window.requestParams")
             
             if isinstance(requestParams, str):

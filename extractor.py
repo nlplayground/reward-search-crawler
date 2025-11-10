@@ -103,7 +103,7 @@ class Extractor:
                             # Save to GCS bucket
                             blob_name = await self.save_to_gcs(result, origin, destination, d)
                             print(f"Saved to GCS: {blob_name}")
-                        print(f"Fetched {result} for {origin} -> {destination} on {d} for {self.program}")
+                        # print(f"Fetched {result} for {origin} -> {destination} on {d} for {self.program}")
                     except Exception as e:
                         print(f"{self.program} Error fetching {origin} -> {destination} on {d}: {e}")
                     
